@@ -1,0 +1,8 @@
+bin/
+obj/
+*.pdb
+*.obj
+*.log
+build.log
+*.user
+.vs/
