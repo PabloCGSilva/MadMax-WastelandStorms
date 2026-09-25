@@ -1,4 +1,4 @@
-# Mad Max – Wasteland Storms (v0.9.0-beta1)
+# Mad Max – Wasteland Storms (v0.9.1-beta2)
 
 No Mad Max as tempestades só aparecem uma vez a cada 2 a 2,5 horas de jogo,
 então a maioria das sessões não tem nenhuma. O **Wasteland Storms** deixa você
@@ -10,6 +10,10 @@ mesmo saque no olho da tempestade. O ciclo de tempestades do próprio jogo
 continua funcionando por baixo, intocado.
 
 **Esta é uma versão beta.** Faça backup dos seus saves antes de testar.
+
+## Novidades do beta2
+
+* **Correção para Steam.** Na Steam a versão anterior não encontrava nenhuma das funções do jogo: o executável da Steam mantém o código criptografado até o jogo começar (o DRM da Steam), e o mod procurava cedo demais. Agora ele espera o jogo começar antes de procurar. Testado simulando esse início na versão da GOG; quem joga na Steam, por favor mande o `scripts\WastelandStorms.log` se algo der errado.
 
 ## Presets
 

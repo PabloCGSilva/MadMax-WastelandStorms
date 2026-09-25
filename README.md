@@ -1,4 +1,4 @@
-# Mad Max – Wasteland Storms (v0.9.0-beta1)
+# Mad Max – Wasteland Storms (v0.9.1-beta2)
 
 Storms in Mad Max only roll in once every 2 to 2.5 hours of play, so most
 sessions never see one. **Wasteland Storms** lets you choose how often they
@@ -9,6 +9,10 @@ sandstorms and thunderstorms, the same debris, the same loot in the eye of the
 storm. The game's own storm cycle keeps running underneath, untouched.
 
 **This is a beta.** Back up your saves before trying it.
+
+## What's new in beta2
+
+* **Steam fix.** On Steam the previous version found none of the game functions it needs: the Steam executable keeps its code encrypted until the game starts (Steam's DRM), and the mod was looking too early. It now waits for the game to start before looking. Tested by simulating that startup on the GOG version; Steam players, please send `scripts\WastelandStorms.log` if anything goes wrong.
 
 ## Presets
 

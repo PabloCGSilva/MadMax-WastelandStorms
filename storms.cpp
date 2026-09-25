@@ -26,7 +26,7 @@
 
 // 1 while developing (F11 = one storm now, extra log lines). Release: 0.
 #define WS_DEV 0
-#define WS_VERSION "0.9.0-beta1"
+#define WS_VERSION "0.9.1-beta2"
 
 // ---------------------------------------------------------------- logging --
 static char g_modDir[MAX_PATH] = "";
@@ -654,6 +654,45 @@ static const char* InstallHook(uintptr_t target, LPVOID hook, LPVOID* orig) {
     return MH_StatusToString(MH_EnableHook((LPVOID)target));
 }
 
+// ------------------------------------------------------------- startup --
+// Test switch: MADMAX_MODS_DEFER=1 in the environment, or a file
+// scriptsorce_steam_path.txt, forces the deferred (Steam) startup path on a
+// build whose code is readable at load time.
+static bool ForceDefer() {
+    char v[8];
+    if (GetEnvironmentVariableA("MADMAX_MODS_DEFER", v, sizeof(v)) > 0 && v[0] == '1') return true;
+    char path[MAX_PATH];                             // or a marker file: <game>\scriptsorce_steam_path.txt
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    char* slash = strrchr(path, '\\'); if (slash) slash[1] = 0;
+    strcat_s(path, "scripts\\force_steam_path.txt");
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+static void InstallMod(bool ok);
+static volatile LONG g_installed = 0;
+typedef void (WINAPI* GetStartupInfoWFn)(LPSTARTUPINFOW info, uintptr_t chain);
+static GetStartupInfoWFn GetStartupInfoW_orig = nullptr;
+
+// Not one signature matched: the code is not readable yet (Steam's DRM keeps
+// it encrypted until the game starts), as opposed to a build that differs.
+static bool NoSignatureMatched() {
+    for (int i = 0; i < SIG_COUNT; i++) if (g_sigs[i].matches) return false;
+    return true;
+}
+
+// The second argument is not part of GetStartupInfoW; mm_sdk-based plugins
+// pass a marker through it to each other, so it is forwarded untouched.
+static void WINAPI GetStartupInfoW_hook(LPSTARTUPINFOW info, uintptr_t chain) {
+    GetStartupInfoW_orig(info, chain);
+    if (g_installed) return;
+    bool ok = ResolveGameAddresses();
+    if (!ok && NoSignatureMatched()) return;           // still encrypted, wait for the next call
+    if (InterlockedExchange(&g_installed, 1) == 0) {
+        LogLine("game code ready (C runtime startup), installing");
+        InstallMod(ok);
+    }
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_DETACH) {
@@ -666,8 +705,29 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
     InitPaths(hModule);
     LogStart();
     srand(GetTickCount());
+    // Another ASI (e.g. Enhanced Convoys) may already have initialised
+    // MinHook in its own copy; each DLL has its own MinHook state, so this is
+    // independent of it.
+    MH_STATUS init = MH_Initialize();
     bool ok = ResolveGameAddresses();
     LogLine("Wasteland Storms %s", WS_VERSION);
+    LogLine("MinHook: %s", MH_StatusToString(init));
+    if ((!ok && NoSignatureMatched()) || ForceDefer()) {
+        // Steam: the executable is wrapped by Steam's DRM and its code is still
+        // encrypted while plugins load, so nothing can match yet. The game's C
+        // runtime startup calls GetStartupInfoW once the real code runs;
+        // resolve and install from there (the way gigaHours' mm_sdk does).
+        LPVOID gsi = (LPVOID)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetStartupInfoW");
+        MH_STATUS c = gsi ? MH_CreateHook(gsi, (LPVOID)GetStartupInfoW_hook, (LPVOID*)&GetStartupInfoW_orig) : MH_ERROR_FUNCTION_NOT_FOUND;
+        MH_STATUS e = (c == MH_OK) ? MH_EnableHook(gsi) : c;
+        LogLine("game code not readable yet (Steam DRM?), installing at game startup: %s", MH_StatusToString(e));
+        return TRUE;
+    }
+    InstallMod(ok);
+    return TRUE;
+}
+
+static void InstallMod(bool ok) {
     LogLine("game check: %s", g_versionStatus);
     for (int i = 0; i < SIG_COUNT; i++)
         LogLine("  %-60s %s (matches %d)%s", g_sigs[i].name, g_sigs[i].matches == 1 ? "OK" : "--", g_sigs[i].matches,
@@ -680,18 +740,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
             "The mod stays loaded but does nothing, so the game is safe to play. "
             "Please report your game version (store + patch) to the mod author.", g_versionStatus);
         MessageBoxA(NULL, msg, "Mad Max - Wasteland Storms", MB_OK | MB_ICONWARNING);
-        return TRUE;
+        return;
     }
 
     LoadSettings();
     SendEventMsg = (SendMsgFn)g_sigs[SIG_SENDMSG].resolved;
     CGameObject_FindOptional = (FindOptionalFn)g_sigs[SIG_FINDOPTIONAL].resolved;
 
-    // Another ASI (e.g. Enhanced Convoys) may already have initialised
-    // MinHook in its own copy; each DLL has its own MinHook state, so this is
-    // independent of it.
-    MH_STATUS init = MH_Initialize();
-    LogLine("MinHook: %s", MH_StatusToString(init));
     LogLine("frame hook: %s", InstallHook(g_sigs[SIG_UPDATECONTROLLER].resolved, (LPVOID)UpdateController_hook, (LPVOID*)&UpdateController_orig));
     LogLine("weather manager hook: %s", g_sigs[SIG_TOD_RENDER].matches == 1
         ? InstallHook(g_sigs[SIG_TOD_RENDER].resolved, (LPVOID)TodInternalUpdateRender_hook, (LPVOID*)&TodInternalUpdateRender_orig)
@@ -708,5 +763,4 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
         LogLine("environment tags: signatures not found, the startup notice only checks the weather");
     }
     LogLine("ready: press the hotkey in game to choose how often storms come");
-    return TRUE;
 }
