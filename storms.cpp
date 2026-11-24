@@ -26,7 +26,7 @@
 
 // 1 while developing (F11 = one storm now, extra log lines). Release: 0.
 #define WS_DEV 0
-#define WS_VERSION "0.9.1-beta2"
+#define WS_VERSION "0.9.2-beta3-steamtest5"
 
 // ---------------------------------------------------------------- logging --
 static char g_modDir[MAX_PATH] = "";
@@ -85,22 +85,48 @@ static GameSignature g_sigs[] = {
 };
 enum { SIG_UPDATECONTROLLER = 0, SIG_SENDMSG, SIG_FINDOPTIONAL, SIG_TOD_RENDER, SIG_GUIPUSH, SIG_LOCRAW, SIG_TAGREGISTER, SIG_COUNT };
 
-static uintptr_t g_textStart = 0, g_textEnd = 0;
+// The Steam build (exe timestamp 0x5628A448) runs its code from the
+// protector's .xpdata section, re-encoded: register-to-register instructions
+// use the other ModRM direction (GOG `33 C0` xor eax,eax is `31 C0` there,
+// GOG `4C 8B E1` mov r12,rcx is `49 89 CC`); the composition table accessor
+// was found there byte-identical but for that. The empty REX prefix of a
+// prologue push (`40 57` push rdi) is dropped there as well (steamtest4). These are the GOG patterns with
+// every reg-reg instruction rewritten that way (analysis/steam/steam_forms.py,
+// 2026-11-24), tried when the GOG form is not found. nullptr = the pattern has
+// no reg-reg instruction, its GOG form is the Steam form.
+static const char* g_steamPatterns[] = {
+    "48 89 E0 41 54 48 81 EC 90 00 00 00 48 C7 44 24 20 FE FF FF FF 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 0F 29 70 E8 0F 28 F1 48 89 CD F3 0F 10 81 00 03 00 00",
+    "48 81 EC 68 02 00 00 48 8B 05 ?? ?? ?? ?? 48 31 E0 48 89 84 24 50 02 00 00 48 8D 54 24 50",
+    "48 89 E0 57 48 83 EC 70 48 C7 44 24 48 FE FF FF FF 48 89 58 08 48 89 70 10",
+    "48 89 E0 48 89 58 10 48 89 68 18 48 89 70 20 57 41 54 41 55 48 81 EC 80 00 00 00",
+    "48 89 74 24 10 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 0F B6 F2 48 89 CF 48 85 C0",
+    "53 48 83 EC 30 4C 8B 41 28 89 D3 49 8B 40 08 80 78 49 00 75 ?? 39 50 18",
+    "F3 0F 11 11 49 89 C8 48 8B 0D ?? ?? ?? ?? 41 89 D1 48 8D 15 ?? ?? ?? ??",
+};
+static_assert(sizeof(g_steamPatterns) / sizeof(g_steamPatterns[0]) == SIG_COUNT, "one Steam form per signature");
+static bool g_sigSteamForm[SIG_COUNT];
+
+static uintptr_t g_scanStart[4], g_scanEnd[4];      // the code section(s) the signatures are looked for in
+static int g_scanRegions = 0;
 static unsigned int g_exeTimeStamp = 0;
 static char g_versionStatus[240] = "not checked";
 
 static bool ScanBytes(const unsigned char* bytes, const bool* wild, int len, GameSignature& sig) {
     sig.matches = 0; sig.resolved = 0;
-    const unsigned char* p = (const unsigned char*)g_textStart;
-    const unsigned char* end = (const unsigned char*)g_textEnd - len;
-    for (; p <= end; p++) {
-        if (!wild[0] && p[0] != bytes[0]) continue;
-        int i = 1;
-        for (; i < len; i++) if (!wild[i] && p[i] != bytes[i]) break;
-        if (i == len) {
-            if (++sig.matches == 1) sig.resolved = (uintptr_t)p;
-            else break;
-        }
+    for (int r = 0; r < g_scanRegions && sig.matches < 2; r++) {
+        const unsigned char* p = (const unsigned char*)g_scanStart[r];
+        const unsigned char* end = (const unsigned char*)g_scanEnd[r] - len;
+        __try {                                          // the pages were checked readable; a protector may still change them
+            for (; p <= end; p++) {
+                if (!wild[0] && p[0] != bytes[0]) continue;
+                int i = 1;
+                for (; i < len; i++) if (!wild[i] && p[i] != bytes[i]) break;
+                if (i == len) {
+                    if (++sig.matches == 1) sig.resolved = (uintptr_t)p;
+                    else break;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) { sig.matches = 0; sig.resolved = 0; break; }
     }
     return sig.matches == 1;
 }
@@ -110,9 +136,9 @@ static bool ScanBytes(const unsigned char* bytes, const bool* wild, int len, Gam
 // first 5 bytes with `jmp rel32` (E9 xx xx xx xx) and leaves every byte after
 // them untouched, so if the plain pattern finds nothing, look for exactly
 // that: E9 + 4 wildcards + the original pattern from byte 5 on.
-static bool ScanPattern(GameSignature& sig) {
+static bool ScanPatternText(GameSignature& sig, const char* pattern) {
     unsigned char bytes[128]; bool wild[128]; int len = 0;
-    for (const char* c = sig.pattern; *c && len < 128; ) {
+    for (const char* c = pattern; *c && len < 128; ) {
         while (*c == ' ') c++;
         if (!*c) break;
         if (c[0] == '?') { wild[len] = true; bytes[len] = 0; len++; c += 2; continue; }
@@ -128,6 +154,140 @@ static bool ScanPattern(GameSignature& sig) {
     return true;
 }
 
+// GOG form first, then the Steam form (see g_steamPatterns).
+static bool ScanPattern(GameSignature& sig) {
+    int i = (int)(&sig - g_sigs);
+    g_sigSteamForm[i] = false;
+    if (ScanPatternText(sig, sig.pattern) || sig.matches || !g_steamPatterns[i]) return sig.matches == 1;
+    g_sigSteamForm[i] = ScanPatternText(sig, g_steamPatterns[i]);
+    return g_sigSteamForm[i];
+}
+
+// Opt-in for the Steam test: the mod only runs on signatures found in their
+// Steam form when <game>\scripts\steam_try.txt exists.
+static bool SteamTryEnabled() {
+    char path[MAX_PATH];
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    char* slash = strrchr(path, '\\'); if (slash) slash[1] = 0;
+    strcat_s(path, "scripts\\steam_try.txt");
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+static int SteamFormsUsed() {
+    int n = 0;
+    for (int i = 0; i < SIG_COUNT; i++) if (g_sigs[i].matches == 1 && g_sigSteamForm[i]) n++;
+    return n;
+}
+
+// ----------------------------------------------------------- code section --
+// Which section holds the game's code. The GOG build names it .text. The Steam
+// build a tester ran on 2026-11-23 (exe timestamp 0x5628A448) is wrapped by a
+// protector that renames every section (.bss .data1 .data ... .xpdata .xtext):
+// the game's code is the first one, ".bss" (BaseOfCode, the size of GOG's
+// .text), decrypted a few seconds after start; the protector's ".xpdata" holds
+// code too (some game functions matched there). So without a .text the code
+// section is the one holding BaseOfCode, else the first executable one, and
+// the scan waits until it is decrypted, then also covers every other big
+// section full of code. Nothing is read before VirtualQuery says the pages
+// are readable.
+static char g_codeSection[96] = "none";
+static bool g_codeReady = false;     // renamed sections: the code section is decrypted and was scanned
+static int g_lastCodeRuns = -1, g_stableChecks = 0;
+static bool g_deferred = false;      // installing from the waiting thread: no message box (it would sit behind the starting game)
+
+static bool RangeReadable(uintptr_t p, size_t n) {
+    uintptr_t end = p + n;
+    while (p < end) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery((LPCVOID)p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
+        if (!(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))
+            || (mbi.Protect & PAGE_GUARD)) return false;
+        p = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+    }
+    return true;
+}
+
+// Compiled code is full of int3 (CC) padding between functions; encrypted code
+// has almost none. Counts CC CC CC CC runs; -1 = not readable.
+static int CountPadding(const uint8_t* p, size_t n) {
+    int runs = 0;
+    __try {
+        for (size_t k = 0; k + 4 <= n; k += 4)
+            if (*(const uint32_t*)(p + k) == 0xCCCCCCCCu) runs++;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    return runs;
+}
+
+static int SectionPaddingRuns(const IMAGE_SECTION_HEADER* sec, uintptr_t base) {
+    size_t n = sec->Misc.VirtualSize < 0x1000000 ? sec->Misc.VirtualSize : 0x1000000;   // first 16 MB
+    if (!RangeReadable(base + sec->VirtualAddress, n)) return -1;
+    return CountPadding((const uint8_t*)(base + sec->VirtualAddress), n);
+}
+
+static int PickCodeSection(const IMAGE_SECTION_HEADER* sec, int i, const char* why) {
+    char name[9] = { 0 }; memcpy(name, sec->Name, 8);
+    snprintf(g_codeSection, sizeof(g_codeSection), "%s (%s)", name, why);
+    return i;
+}
+
+static int CodeSectionIndex(const IMAGE_NT_HEADERS64* nt, uintptr_t base) {
+    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+    int n = nt->FileHeader.NumberOfSections;
+    for (int i = 0; i < n; i++)
+        if (memcmp(sec[i].Name, ".text", 5) == 0) return PickCodeSection(sec + i, i, "named .text");
+    DWORD boc = nt->OptionalHeader.BaseOfCode;
+    for (int i = 0; i < n; i++)
+        if (boc >= sec[i].VirtualAddress && boc < sec[i].VirtualAddress + sec[i].Misc.VirtualSize)
+            return PickCodeSection(sec + i, i, "holds BaseOfCode");
+    for (int i = 0; i < n; i++)
+        if (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) return PickCodeSection(sec + i, i, "first executable");
+    return -1;
+}
+
+static void AddScanRegion(uintptr_t base, const IMAGE_SECTION_HEADER* sec) {
+    if (g_scanRegions >= 4) return;
+    g_scanStart[g_scanRegions] = base + sec->VirtualAddress;
+    g_scanEnd[g_scanRegions] = g_scanStart[g_scanRegions] + sec->Misc.VirtualSize;
+    if (g_scanRegions++) {
+        char name[9] = { 0 }; memcpy(name, sec->Name, 8);
+        strcat_s(g_codeSection, " + ");
+        strcat_s(g_codeSection, name);
+    }
+}
+
+// Name of the section an address is in, for the signature table.
+static const char* SectionNameOf(uintptr_t a) {
+    static char name[9];
+    auto base = (uintptr_t)GetModuleHandleA(nullptr);
+    auto nt = (const IMAGE_NT_HEADERS64*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
+        if (a >= base + sec[i].VirtualAddress && a < base + sec[i].VirtualAddress + sec[i].Misc.VirtualSize) {
+            memset(name, 0, sizeof(name)); memcpy(name, sec[i].Name, 8);
+            return name;
+        }
+    return "-";
+}
+
+// Padding runs of every section of 1 MB or more, for the log ("-" = not readable).
+static const char* SectionPaddingText() {
+    static char text[400];
+    auto base = (uintptr_t)GetModuleHandleA(nullptr);
+    auto nt = (const IMAGE_NT_HEADERS64*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+    text[0] = 0;
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+        if (sec[i].Misc.VirtualSize < 0x100000) continue;
+        char name[9] = { 0 }; memcpy(name, sec[i].Name, 8);
+        int runs = SectionPaddingRuns(sec + i, base);
+        char item[48];
+        if (runs < 0) snprintf(item, sizeof(item), "%s%s -", text[0] ? ", " : "", name);
+        else snprintf(item, sizeof(item), "%s%s %d", text[0] ? ", " : "", name, runs);
+        strcat_s(text, item);
+    }
+    return text;
+}
+
 static bool ResolveGameAddresses() {
     uintptr_t base = (uintptr_t)GetModuleHandleA(NULL);
     const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)base;
@@ -135,15 +295,31 @@ static bool ResolveGameAddresses() {
     const IMAGE_NT_HEADERS64* nt = (const IMAGE_NT_HEADERS64*)(base + dos->e_lfanew);
     if (nt->Signature != IMAGE_NT_SIGNATURE) { snprintf(g_versionStatus, sizeof(g_versionStatus), "no PE header"); return false; }
     g_exeTimeStamp = nt->FileHeader.TimeDateStamp;
-    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
-    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
-        if (memcmp(sec->Name, ".text", 5) == 0) {
-            g_textStart = base + sec->VirtualAddress;
-            g_textEnd = g_textStart + sec->Misc.VirtualSize;
-            break;
-        }
+    int cs = CodeSectionIndex(nt, base);
+    if (cs < 0) { snprintf(g_versionStatus, sizeof(g_versionStatus), "no code section"); return false; }
+    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt) + cs;
+    g_scanRegions = 0;
+    if (!RangeReadable(base + sec->VirtualAddress, sec->Misc.VirtualSize)) {
+        snprintf(g_versionStatus, sizeof(g_versionStatus), "code section %s not readable yet", g_codeSection);
+        return false;
     }
-    if (!g_textStart) { snprintf(g_versionStatus, sizeof(g_versionStatus), "no .text section"); return false; }
+    if (memcmp(sec->Name, ".text", 5) != 0) {
+        // renamed sections: scan once the code section is decrypted (thousands of
+        // int3 runs, the same count for 1 s), together with every other big
+        // section full of code
+        int runs = SectionPaddingRuns(sec, base);
+        g_stableChecks = (runs >= 1000 && runs == g_lastCodeRuns) ? g_stableChecks + 1 : 0;
+        g_lastCodeRuns = runs;
+        if (g_stableChecks < 4) {
+            snprintf(g_versionStatus, sizeof(g_versionStatus), "code section %s not decrypted yet (%d int3 runs)", g_codeSection, runs);
+            return false;
+        }
+        g_codeReady = true;
+        AddScanRegion(base, sec);
+        const IMAGE_SECTION_HEADER* s = IMAGE_FIRST_SECTION(nt);
+        for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
+            if (i != cs && s[i].Misc.VirtualSize >= 0x100000 && SectionPaddingRuns(s + i, base) >= 1000) AddScanRegion(base, s + i);
+    } else AddScanRegion(base, sec);
 
     int failed = 0; char failList[200] = "";
     for (int i = 0; i < SIG_COUNT; i++) {
@@ -154,10 +330,15 @@ static bool ResolveGameAddresses() {
         }
     }
     if (failed) {
-        snprintf(g_versionStatus, sizeof(g_versionStatus), "signature not found: %s (exe timestamp 0x%08X)", failList, g_exeTimeStamp);
+        snprintf(g_versionStatus, sizeof(g_versionStatus), "signature not found: %s (exe timestamp 0x%08X, code section %s)", failList, g_exeTimeStamp, g_codeSection);
         return false;
     }
-    snprintf(g_versionStatus, sizeof(g_versionStatus), "OK (exe timestamp 0x%08X, %s)", g_exeTimeStamp,
+    if (SteamFormsUsed() && !SteamTryEnabled()) {
+        snprintf(g_versionStatus, sizeof(g_versionStatus), "all required signatures found, %d of them in their Steam form; not enabled: no scripts\\steam_try.txt (exe timestamp 0x%08X)",
+            SteamFormsUsed(), g_exeTimeStamp);
+        return false;
+    }
+    snprintf(g_versionStatus, sizeof(g_versionStatus), "OK (exe timestamp 0x%08X, code section %s, %s)", g_exeTimeStamp, g_codeSection,
         g_exeTimeStamp == 0x566520B2u ? "the GOG build this was made on" : "a build not seen by the author -- please report how it works");
     return true;
 }
@@ -656,16 +837,52 @@ static const char* InstallHook(uintptr_t target, LPVOID hook, LPVOID* orig) {
 
 // ------------------------------------------------------------- startup --
 // Test switch: MADMAX_MODS_DEFER=1 in the environment, or a file
-// scriptsorce_steam_path.txt, forces the deferred (Steam) startup path on a
+// scripts\force_steam_path.txt, forces the deferred (Steam) startup path on a
 // build whose code is readable at load time.
+static bool g_forcePollOnly = false;
 static bool ForceDefer() {
     char v[8];
     if (GetEnvironmentVariableA("MADMAX_MODS_DEFER", v, sizeof(v)) > 0 && v[0] == '1') return true;
-    char path[MAX_PATH];                             // or a marker file: <game>\scriptsorce_steam_path.txt
+    char path[MAX_PATH];                             // or a marker file: <game>\scripts\force_steam_path.txt
     GetModuleFileNameA(NULL, path, MAX_PATH);
     char* slash = strrchr(path, '\\'); if (slash) slash[1] = 0;
     strcat_s(path, "scripts\\force_steam_path.txt");
-    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "r") != 0 || !f) return false;
+    char text[8] = { 0 };
+    fread(text, 1, 4, f); fclose(f);
+    g_forcePollOnly = strncmp(text, "poll", 4) == 0;   // "poll": skip the GetStartupInfoW trigger
+    return true;
+}
+
+// Padding runs of the code section (see CodeSectionIndex); -1 = not readable.
+static int TextPaddingRuns() {
+    auto base = (uintptr_t)GetModuleHandleA(nullptr);
+    auto nt = (const IMAGE_NT_HEADERS64*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+    int i = CodeSectionIndex(nt, base);
+    return i < 0 ? -1 : SectionPaddingRuns(IMAGE_FIRST_SECTION(nt) + i, base);
+}
+
+// What kind of executable this is: Steam's DRM wraps the game in a ".bind"
+// section, the protector of the Steam build seen on 2026-11-23 renames them
+// all; a different build shows a different timestamp and size.
+static void LogExeInfo() {
+    auto base = (const uint8_t*)GetModuleHandleA(nullptr);
+    auto nt = (const IMAGE_NT_HEADERS*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+    char sections[768] = { 0 };
+    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+        char name[9] = { 0 }; memcpy(name, sec[i].Name, 8);
+        DWORD c = sec[i].Characteristics;
+        char item[64]; snprintf(item, sizeof(item), "%s%s(%X at +%X %c%c%c)", i ? " " : "", name, (unsigned)sec[i].Misc.VirtualSize,
+            (unsigned)sec[i].VirtualAddress, c & IMAGE_SCN_MEM_READ ? 'R' : '-', c & IMAGE_SCN_MEM_WRITE ? 'W' : '-', c & IMAGE_SCN_MEM_EXECUTE ? 'X' : '-');
+        strcat_s(sections, item);
+    }
+    LogLine("executable: timestamp 0x%08X, image size 0x%X, entry +0x%X, code base +0x%X size 0x%X, sections: %s", (unsigned)nt->FileHeader.TimeDateStamp,
+        (unsigned)nt->OptionalHeader.SizeOfImage, (unsigned)nt->OptionalHeader.AddressOfEntryPoint,
+        (unsigned)nt->OptionalHeader.BaseOfCode, (unsigned)nt->OptionalHeader.SizeOfCode, sections);
+    LogLine("code padding runs: %d (thousands = readable code; near 0 = still encrypted)", TextPaddingRuns());
+    LogLine("code section: %s; int3 padding runs per section: %s", g_codeSection, SectionPaddingText());
 }
 
 static void InstallMod(bool ok);
@@ -682,15 +899,143 @@ static bool NoSignatureMatched() {
 
 // The second argument is not part of GetStartupInfoW; mm_sdk-based plugins
 // pass a marker through it to each other, so it is forwarded untouched.
+// Both triggers below resolve and install at most once.
+static CRITICAL_SECTION g_installLock;
+// ------------------------------------------------------------ steam probe --
+// Diagnostics for a protected build whose signatures did not all match (Steam
+// tester, 2026-11-23: only 2 of 11 found, both in .xpdata, 2 s after start).
+// The mod stays off; a background thread scans again right away, at 30 s and
+// at 120 s (the code section may still be being decrypted) and logs, for each
+// signature not found, how many times its first 16 bytes and the rest of it
+// occur, where, and 32 bytes from there -- enough to tell a late decryption,
+// a moved function and changed code apart, and to write signatures for it.
+static void HexAt(uintptr_t a, char* out, size_t size) {
+    out[0] = 0;
+    __try {
+        for (int k = 0; k < 32 && (size_t)(k * 3 + 3) < size; k++)
+            snprintf(out + k * 3, size - k * 3, "%02X ", ((const unsigned char*)a)[k]);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { strcpy_s(out, size, "(unreadable)"); }
+}
+
+static int CountWindow(const unsigned char* bytes, const bool* wild, int len, uintptr_t* first) {
+    int matches = 0; *first = 0;
+    for (int r = 0; r < g_scanRegions && matches < 99; r++) {
+        const unsigned char* p = (const unsigned char*)g_scanStart[r];
+        const unsigned char* end = (const unsigned char*)g_scanEnd[r] - len;
+        __try {
+            for (; p <= end; p++) {
+                if (!wild[0] && p[0] != bytes[0]) continue;
+                int i = 1;
+                for (; i < len; i++) if (!wild[i] && p[i] != bytes[i]) break;
+                if (i == len) {
+                    if (!matches++) *first = (uintptr_t)p;
+                    if (matches >= 99) break;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) { break; }
+    }
+    return matches;
+}
+
+static void ProbeSignature(const GameSignature& sig, const char* pattern, const char* form, uintptr_t base) {
+    unsigned char bytes[128]; bool wild[128]; int len = 0;
+    for (const char* c = pattern; *c && len < 128; ) {
+        while (*c == ' ') c++;
+        if (!*c) break;
+        if (c[0] == '?') { wild[len] = true; bytes[len] = 0; len++; c += 2; continue; }
+        unsigned int v = 0; sscanf_s(c, "%2x", &v); bytes[len] = (unsigned char)v; wild[len] = false; len++; c += 2;
+    }
+    uintptr_t headAt = 0, tailAt = 0;
+    int head = CountWindow(bytes, wild, len < 16 ? len : 16, &headAt);
+    int tail = len >= 24 ? CountWindow(bytes + 16, wild + 16, len - 16, &tailAt) : -1;
+    char headHex[100], tailHex[100];
+    HexAt(headAt, headHex, sizeof(headHex));
+    if (tailAt) HexAt(tailAt - 16, tailHex, sizeof(tailHex));
+    LogLine("    %s, %s form: first 16 bytes %d time(s)%s%s +%X: %s; the rest (%d bytes) %d time(s)%s%s +%X: %s",
+        sig.name, form, head, headAt ? ", first in " : "", headAt ? SectionNameOf(headAt) : "", headAt ? (unsigned)(headAt - base) : 0,
+        headAt ? headHex : "-", len - 16, tail, tailAt ? ", it would start in " : "", tailAt ? SectionNameOf(tailAt - 16) : "",
+        tailAt ? (unsigned)(tailAt - 16 - base) : 0, tailAt ? tailHex : "-");
+}
+
+static void SteamProbeRound(const char* when) {
+    auto base = (uintptr_t)GetModuleHandleA(nullptr);
+    auto nt = (const IMAGE_NT_HEADERS64*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+    const IMAGE_SECTION_HEADER* s = IMAGE_FIRST_SECTION(nt);
+    int cs = CodeSectionIndex(nt, base);
+    g_scanRegions = 0;
+    if (cs < 0 || !RangeReadable(base + s[cs].VirtualAddress, s[cs].Misc.VirtualSize)) { LogLine("steam probe (%s): code section not readable", when); return; }
+    AddScanRegion(base, s + cs);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
+        if (i != cs && s[i].Misc.VirtualSize >= 0x100000 && SectionPaddingRuns(s + i, base) >= 1000) AddScanRegion(base, s + i);
+    LogLine("steam probe (%s): scanning %s; int3 padding runs per section: %s", when, g_codeSection, SectionPaddingText());
+    for (int i = 0; i < SIG_COUNT; i++) {
+        GameSignature& sig = g_sigs[i];
+        if (ScanPattern(sig)) LogLine("    %s: OK in %s +%X (%s form)", sig.name, SectionNameOf(sig.resolved), (unsigned)(sig.resolved - base),
+            g_sigSteamForm[i] ? "Steam" : "GOG");
+        else {
+            LogLine("    %s: not found (matches %d)", sig.name, sig.matches);
+            ProbeSignature(sig, sig.pattern, "GOG", base);
+            if (g_steamPatterns[i]) ProbeSignature(sig, g_steamPatterns[i], "Steam", base);
+        }
+    }
+}
+
+static DWORD WINAPI SteamProbe(LPVOID) {
+    SteamProbeRound("at install");
+    Sleep(30000);
+    SteamProbeRound("30 s later");
+    Sleep(90000);
+    SteamProbeRound("120 s later");
+    LogLine("steam probe done");
+    return 0;
+}
+
+static void StartSteamProbe() {
+    HANDLE th = CreateThread(nullptr, 0, SteamProbe, nullptr, 0, nullptr);
+    if (th) CloseHandle(th);
+}
+
+static bool TryInstall(const char* how, bool wait) {
+    // The game's main thread (GetStartupInfoW) never waits here: while the
+    // other trigger scans or installs, the game goes on starting.
+    if (!wait) { if (!TryEnterCriticalSection(&g_installLock)) return false; }
+    else EnterCriticalSection(&g_installLock);
+    bool done = g_installed != 0;
+    if (!done) {
+        bool ok = ResolveGameAddresses();
+        if (ok || g_codeReady || !NoSignatureMatched()) {                 // readable now (a build that differs still ends here)
+            g_installed = 1;
+            LogLine("game code ready (%s), installing", how);
+            InstallMod(ok);
+            done = true;
+        }
+    }
+    LeaveCriticalSection(&g_installLock);
+    return done;
+}
+
 static void WINAPI GetStartupInfoW_hook(LPSTARTUPINFOW info, uintptr_t chain) {
     GetStartupInfoW_orig(info, chain);
-    if (g_installed) return;
-    bool ok = ResolveGameAddresses();
-    if (!ok && NoSignatureMatched()) return;           // still encrypted, wait for the next call
-    if (InterlockedExchange(&g_installed, 1) == 0) {
-        LogLine("game code ready (C runtime startup), installing");
-        InstallMod(ok);
+    if (!g_installed) TryInstall("C runtime startup", false);
+}
+
+// Fallback for when GetStartupInfoW is never called after this plugin loads
+// (the plugin loader may come in after the game's C runtime startup): look
+// again every 250 ms for up to 5 minutes, logging what the sections look like
+// every 10 s.
+static DWORD WINAPI WaitForGameCode(LPVOID) {
+    for (int i = 0; i < 1200 && !g_installed; i++) {
+        Sleep(250);
+        if (TryInstall("found while waiting", true)) return 0;
+        if (i % 40 == 39)
+            LogLine("waiting for game code (%d s): %s; code section %s; int3 padding runs per section: %s",
+                (i + 1) / 4, g_versionStatus, g_codeSection, SectionPaddingText());
     }
+    if (!g_installed)
+        LogLine("code padding runs now: %d (thousands = the code is readable, so the functions really are not there)", TextPaddingRuns());
+    if (!g_installed)
+        LogLine("gave up after 5 minutes: none of the game functions were found -- please send this log to the mod author.");
+    return 0;
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
@@ -709,18 +1054,27 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
     // MinHook in its own copy; each DLL has its own MinHook state, so this is
     // independent of it.
     MH_STATUS init = MH_Initialize();
+    InitializeCriticalSection(&g_installLock);
+    bool defer = ForceDefer();
     bool ok = ResolveGameAddresses();
     LogLine("Wasteland Storms %s", WS_VERSION);
     LogLine("MinHook: %s", MH_StatusToString(init));
-    if ((!ok && NoSignatureMatched()) || ForceDefer()) {
+    LogExeInfo();
+    if ((!ok && NoSignatureMatched() && !g_codeReady) || defer) {
+        g_deferred = true;
         // Steam: the executable is wrapped by Steam's DRM and its code is still
         // encrypted while plugins load, so nothing can match yet. The game's C
         // runtime startup calls GetStartupInfoW once the real code runs;
         // resolve and install from there (the way gigaHours' mm_sdk does).
-        LPVOID gsi = (LPVOID)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetStartupInfoW");
-        MH_STATUS c = gsi ? MH_CreateHook(gsi, (LPVOID)GetStartupInfoW_hook, (LPVOID*)&GetStartupInfoW_orig) : MH_ERROR_FUNCTION_NOT_FOUND;
-        MH_STATUS e = (c == MH_OK) ? MH_EnableHook(gsi) : c;
-        LogLine("game code not readable yet (Steam DRM?), installing at game startup: %s", MH_StatusToString(e));
+        MH_STATUS e = MH_ERROR_DISABLED;
+        if (!g_forcePollOnly) {
+            LPVOID gsi = (LPVOID)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetStartupInfoW");
+            MH_STATUS c = gsi ? MH_CreateHook(gsi, (LPVOID)GetStartupInfoW_hook, (LPVOID*)&GetStartupInfoW_orig) : MH_ERROR_FUNCTION_NOT_FOUND;
+            e = (c == MH_OK) ? MH_EnableHook(gsi) : c;
+        }
+        LogLine("game code not readable yet (Steam DRM?), installing at game startup: %s; also checking again every 250 ms", MH_StatusToString(e));
+        HANDLE th = CreateThread(nullptr, 0, WaitForGameCode, nullptr, 0, nullptr);
+        if (th) CloseHandle(th);
         return TRUE;
     }
     InstallMod(ok);
@@ -730,8 +1084,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
 static void InstallMod(bool ok) {
     LogLine("game check: %s", g_versionStatus);
     for (int i = 0; i < SIG_COUNT; i++)
-        LogLine("  %-60s %s (matches %d)%s", g_sigs[i].name, g_sigs[i].matches == 1 ? "OK" : "--", g_sigs[i].matches,
-            g_sigs[i].alreadyHooked ? " -- already hooked by another mod, chaining behind it" : "");
+        LogLine("  %-60s %s in %s (matches %d)%s%s", g_sigs[i].name, g_sigs[i].matches == 1 ? "OK" : "--",
+            g_sigs[i].resolved ? SectionNameOf(g_sigs[i].resolved) : "-", g_sigs[i].matches,
+            g_sigs[i].alreadyHooked ? " -- already hooked by another mod, chaining behind it" : "",
+                g_sigSteamForm[i] ? " (Steam form)" : "");
     if (!ok) {
         char msg[600];
         snprintf(msg, sizeof(msg),
@@ -739,7 +1095,8 @@ static void InstallMod(bool ok) {
             "Reason: %s\n\n"
             "The mod stays loaded but does nothing, so the game is safe to play. "
             "Please report your game version (store + patch) to the mod author.", g_versionStatus);
-        MessageBoxA(NULL, msg, "Mad Max - Wasteland Storms", MB_OK | MB_ICONWARNING);
+        if (!g_deferred) MessageBoxA(NULL, msg, "Mad Max - Wasteland Storms", MB_OK | MB_ICONWARNING);
+        else if (g_codeReady) StartSteamProbe();
         return;
     }
 
