@@ -120,6 +120,12 @@ The output is `bin\WastelandStorms.asi`.
 * ThirteenAG for the Ultimate ASI Loader.
 * MinHook (Tsuda Kageyu) and Dear ImGui (Omar Cornut) — see
   `THIRD-PARTY-NOTICES.md`.
+* **NordicTraveller**, who ran the Steam test builds and sent the logs that
+  made Steam support possible.
+* **liber88**, who gifted a Steam copy of the game, so the Steam version could
+  be tested directly.
+* The Mad Max modding community on Nexus Mods and the **Mad Max Speedrunning &
+  Modding** Discord server.
 * Everyone who tested and reported back.
 
 ## License

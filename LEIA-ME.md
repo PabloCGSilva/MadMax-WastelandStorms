@@ -105,3 +105,18 @@ StartupNotice=1        ; 0 esconde a mensagem mostrada ao entrar no mundo
 Tudo o que o mod faz fica em `scripts\WastelandStorms.log` (a sessão anterior
 fica em `WastelandStorms.previous.log`). As primeiras linhas dizem se cada
 função do jogo foi encontrada.
+
+## Créditos
+
+* Reversr69, cuja tabela do Cheat Engine revelou o comando `storm.trigger` do
+  jogo.
+* ThirteenAG pelo Ultimate ASI Loader.
+* MinHook (Tsuda Kageyu) e Dear ImGui (Omar Cornut) — veja
+  `THIRD-PARTY-NOTICES.md`.
+* **NordicTraveller**, que rodou as builds de teste da Steam e mandou os logs
+  que tornaram o suporte à Steam possível.
+* **liber88**, que deu de presente uma cópia do jogo na Steam, para a versão
+  Steam poder ser testada diretamente.
+* A comunidade de modding de Mad Max na Nexus Mods e o servidor do Discord
+  **Mad Max Speedrunning & Modding**.
+* Todo mundo que testou e deu retorno.
