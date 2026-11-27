@@ -26,7 +26,7 @@
 
 // 1 while developing (F11 = one storm now, extra log lines). Release: 0.
 #define WS_DEV 0
-#define WS_VERSION "0.9.2-beta3-steamtest5"
+#define WS_VERSION "0.9.2-beta3-steamtest9"
 
 // ---------------------------------------------------------------- logging --
 static char g_modDir[MAX_PATH] = "";
@@ -163,8 +163,10 @@ static bool ScanPattern(GameSignature& sig) {
     return g_sigSteamForm[i];
 }
 
-// Opt-in for the Steam test: the mod only runs on signatures found in their
-// Steam form when <game>\scripts\steam_try.txt exists.
+// Signatures found in their Steam form are used as they are on the Steam build
+// they were tested on (Pablo's own copy, 2026-11-26); on any other build only
+// when <game>\scripts\steam_try.txt exists (the opt-in of the Steam test).
+static const unsigned STEAM_EXE_TIMESTAMP = 0x5628A448u;
 static bool SteamTryEnabled() {
     char path[MAX_PATH];
     GetModuleFileNameA(NULL, path, MAX_PATH);
@@ -333,13 +335,13 @@ static bool ResolveGameAddresses() {
         snprintf(g_versionStatus, sizeof(g_versionStatus), "signature not found: %s (exe timestamp 0x%08X, code section %s)", failList, g_exeTimeStamp, g_codeSection);
         return false;
     }
-    if (SteamFormsUsed() && !SteamTryEnabled()) {
-        snprintf(g_versionStatus, sizeof(g_versionStatus), "all required signatures found, %d of them in their Steam form; not enabled: no scripts\\steam_try.txt (exe timestamp 0x%08X)",
+    if (SteamFormsUsed() && g_exeTimeStamp != STEAM_EXE_TIMESTAMP && !SteamTryEnabled()) {
+        snprintf(g_versionStatus, sizeof(g_versionStatus), "all required signatures found, %d of them in their Steam form; not enabled on this unknown build: no scripts\\steam_try.txt (exe timestamp 0x%08X)",
             SteamFormsUsed(), g_exeTimeStamp);
         return false;
     }
     snprintf(g_versionStatus, sizeof(g_versionStatus), "OK (exe timestamp 0x%08X, code section %s, %s)", g_exeTimeStamp, g_codeSection,
-        g_exeTimeStamp == 0x566520B2u ? "the GOG build this was made on" : "a build not seen by the author -- please report how it works");
+        g_exeTimeStamp == 0x566520B2u ? "the GOG build this was made on" : g_exeTimeStamp == STEAM_EXE_TIMESTAMP ? "the Steam build" : "a build not seen by the author -- please report how it works");
     return true;
 }
 
