@@ -26,7 +26,7 @@
 
 // 1 while developing (F11 = one storm now, extra log lines). Release: 0.
 #define WS_DEV 0
-#define WS_VERSION "0.9.2-beta3-steamtest9"
+#define WS_VERSION "0.9.2-beta3"
 
 // ---------------------------------------------------------------- logging --
 static char g_modDir[MAX_PATH] = "";

@@ -1,4 +1,4 @@
-# Mad Max – Wasteland Storms (v0.9.1-beta2)
+# Mad Max – Wasteland Storms (v0.9.2-beta3)
 
 Storms in Mad Max only roll in once every 2 to 2.5 hours of play, so most
 sessions never see one. **Wasteland Storms** lets you choose how often they
@@ -10,9 +10,12 @@ storm. The game's own storm cycle keeps running underneath, untouched.
 
 **This is a beta.** Back up your saves before trying it.
 
-## What's new in beta2
+## What's new in beta3
 
-* **Steam fix.** On Steam the previous version found none of the game functions it needs: the Steam executable keeps its code encrypted until the game starts (Steam's DRM), and the mod was looking too early. It now waits for the game to start before looking. Tested by simulating that startup on the GOG version; Steam players, please send `scripts\WastelandStorms.log` if anything goes wrong.
+* **Works on Steam, tested on Steam.** beta2 waited for Steam's DRM to decrypt the game, but the code the Steam version
+  actually runs is a re-encoded copy that the mod's search did not recognise. Each game function now has a Steam form
+  as well, and the mod finds all of them in the Steam executable. Played on Steam: the preset hotkey, the on-screen
+  message and the storms themselves all work.
 
 ## Presets
 
@@ -57,8 +60,9 @@ open world only, never inside a stronghold.
 
 ## Install
 
-1. Copy `dinput8.dll` into the game folder, next to `AVAMain.exe`
-   (skip if you already use the ASI loader, e.g. for Enhanced Convoys).
+1. Copy `dinput8.dll` into the game folder, next to the game's exe
+   (`AVAMain.exe` on GOG, `MadMax.exe` on Steam; skip if you already use the
+   ASI loader, e.g. for Enhanced Convoys).
 2. Copy the `scripts` folder into the game folder, so you end up with
    `<game folder>\scripts\WastelandStorms.asi` and `WastelandStorms.ini`.
 3. Start the game and load a save. Once you are outside, a message shows the
@@ -82,11 +86,10 @@ StartupNotice=1        ; 0 hides the message shown when you enter the world
 
 * Works alongside **Enhanced Convoys** (both can be installed together).
 * Texture, model and data mods: no conflict, this mod touches no game file.
-* **GOG**: tested. **Steam**: the mod finds every game function it needs by
-  scanning the running executable, so it should work, but it has not been
-  tested on Steam yet. If it can't find something it disables itself and says
-  so — the game stays safe to play. Please report either way, with
-  `scripts\WastelandStorms.log`.
+* **GOG** and **Steam**: both tested. The mod finds every game function it
+  needs by scanning the running executable. On a version it doesn't know, if
+  it can't find something it disables itself and says so — the game stays
+  safe to play. Please report, with `scripts\WastelandStorms.log`.
 
 ## Known limitations
 

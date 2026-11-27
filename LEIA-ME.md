@@ -1,4 +1,4 @@
-# Mad Max – Wasteland Storms (v0.9.1-beta2)
+# Mad Max – Wasteland Storms (v0.9.2-beta3)
 
 No Mad Max as tempestades só aparecem uma vez a cada 2 a 2,5 horas de jogo,
 então a maioria das sessões não tem nenhuma. O **Wasteland Storms** deixa você
@@ -11,9 +11,14 @@ continua funcionando por baixo, intocado.
 
 **Esta é uma versão beta.** Faça backup dos seus saves antes de testar.
 
-## Novidades do beta2
+## Novidades do beta3
 
-* **Correção para Steam.** Na Steam a versão anterior não encontrava nenhuma das funções do jogo: o executável da Steam mantém o código criptografado até o jogo começar (o DRM da Steam), e o mod procurava cedo demais. Agora ele espera o jogo começar antes de procurar. Testado simulando esse início na versão da GOG; quem joga na Steam, por favor mande o `scripts\WastelandStorms.log` se algo der errado.
+* **Funciona na Steam, testado na Steam.** O beta2 esperava o DRM da Steam
+  descriptografar o jogo, mas o código que a versão Steam executa de fato é
+  uma cópia recodificada que a busca do mod não reconhecia. Agora cada função
+  do jogo tem também a forma da Steam, e o mod encontra todas no executável da
+  Steam. Jogado na Steam: a tecla de preset, a mensagem na tela e as próprias
+  tempestades funcionam.
 
 ## Presets
 
@@ -57,8 +62,9 @@ aparece no mundo aberto, nunca dentro de uma fortaleza.
 
 ## Instalação
 
-1. Copie o `dinput8.dll` para a pasta do jogo, ao lado do `AVAMain.exe`
-   (pule se já usa o ASI loader, por exemplo para o Enhanced Convoys).
+1. Copie o `dinput8.dll` para a pasta do jogo, ao lado do executável do jogo
+   (`AVAMain.exe` na GOG, `MadMax.exe` na Steam; pule se já usa o ASI loader,
+   por exemplo para o Enhanced Convoys).
 2. Copie a pasta `scripts` para a pasta do jogo, ficando
    `<pasta do jogo>\scripts\WastelandStorms.asi` e `WastelandStorms.ini`.
 3. Abra o jogo e carregue um save. Quando você estiver ao ar livre, uma
@@ -83,10 +89,10 @@ StartupNotice=1        ; 0 esconde a mensagem mostrada ao entrar no mundo
 * Funciona junto com o **Enhanced Convoys** (os dois podem ficar instalados).
 * Mods de textura, modelo e dados: sem conflito, este mod não mexe em arquivo
   do jogo.
-* **GOG**: testado. **Steam**: o mod encontra cada função do jogo procurando no
-  executável em execução, então deve funcionar, mas ainda não foi testado na
-  Steam. Se não achar algo, ele se desliga e avisa — o jogo continua seguro.
-  Por favor avise o resultado, com o `scripts\WastelandStorms.log`.
+* **GOG** e **Steam**: os dois testados. O mod encontra cada função do jogo
+  procurando no executável em execução. Numa versão que ele não conhece, se
+  não achar algo, ele se desliga e avisa — o jogo continua seguro. Por favor
+  avise o resultado, com o `scripts\WastelandStorms.log`.
 
 ## Limitações conhecidas
 
